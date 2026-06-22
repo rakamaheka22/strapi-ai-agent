@@ -80,13 +80,13 @@ npm run dev
 
 Mention bot di channel Slack:
 
-| Prompt | Aksi |
-|--------|------|
-| `@Bot tampilkan semua collection yang tersedia` | List semua content types di Strapi |
-| `@Bot ambil semua data dari articles` | List semua entries dari collection "articles" |
-| `@Bot tampilkan artikel dengan ID 3` | Get detail entry #3 dari "articles" |
-| `@Bot ringkaskan isi PDF di artikel ID 5` | Download PDF, extract teks, dan berikan ringkasan |
-| `@Bot apa saja field di collection products?` | List collections lalu tampilkan field yang relevan |
+| Prompt                                          | Aksi                                               |
+| ----------------------------------------------- | -------------------------------------------------- |
+| `@Bot tampilkan semua collection yang tersedia` | List semua content types di Strapi                 |
+| `@Bot ambil semua data dari articles`           | List semua entries dari collection "articles"      |
+| `@Bot tampilkan artikel dengan ID 3`            | Get detail entry #3 dari "articles"                |
+| `@Bot ringkaskan isi PDF di artikel ID 5`       | Download PDF, extract teks, dan berikan ringkasan  |
+| `@Bot apa saja field di collection products?`   | List collections lalu tampilkan field yang relevan |
 
 ## 🛠 Project Structure
 
@@ -106,12 +106,12 @@ strapi-ai-agent/
 
 Bot menggunakan satu tool universal `access_strapi_cms` dengan 4 action:
 
-| Action | Deskripsi |
-|--------|-----------|
-| `list_collections` | Daftar semua Collection Types & Single Types |
-| `get_entries` | Ambil semua entries dari collection (+ filter opsional) |
-| `get_entry` | Ambil satu entry berdasarkan ID |
-| `read_attachment` | Download & extract teks dari PDF attachment |
+| Action             | Deskripsi                                               |
+| ------------------ | ------------------------------------------------------- |
+| `list_collections` | Daftar semua Collection Types & Single Types            |
+| `get_entries`      | Ambil semua entries dari collection (+ filter opsional) |
+| `get_entry`        | Ambil satu entry berdasarkan ID                         |
+| `read_attachment`  | Download & extract teks dari PDF attachment             |
 
 ### Flow Tool Calling
 
@@ -123,13 +123,13 @@ User Prompt → Groq (+ tool defs) → tool_call → Execute → Result → Groq
 
 ## ⚠️ Troubleshooting
 
-| Masalah | Solusi |
-|---------|--------|
-| `Cannot connect to Strapi` | Pastikan Strapi running dan URL di `.env` benar |
-| `401 Unauthorized` | Cek API Token Strapi — harus Full Access |
-| `Socket Mode error` | Pastikan `SLACK_APP_TOKEN` (`xapp-...`) benar dan Socket Mode aktif |
-| `Model not found` | Cek model tersedia di [console.groq.com/docs/models](https://console.groq.com/docs/models) |
-| `PDF extraction empty` | File mungkin scan-based (gambar), bukan text-based PDF |
+| Masalah                    | Solusi                                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| `Cannot connect to Strapi` | Pastikan Strapi running dan URL di `.env` benar                                            |
+| `401 Unauthorized`         | Cek API Token Strapi — harus Full Access                                                   |
+| `Socket Mode error`        | Pastikan `SLACK_APP_TOKEN` (`xapp-...`) benar dan Socket Mode aktif                        |
+| `Model not found`          | Cek model tersedia di [console.groq.com/docs/models](https://console.groq.com/docs/models) |
+| `PDF extraction empty`     | File mungkin scan-based (gambar), bukan text-based PDF                                     |
 
 ## 📝 License
 

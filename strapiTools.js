@@ -71,7 +71,7 @@ const toolDefinitions = [
             ],
             description:
               'The action to perform. ' +
-              '"list_collections" — list all available content types. ' +
+              '"list_collections" — list all available content types. Use "search" parameter to filter by name (e.g. search="venue" to find venue-related collections). ' +
               '"get_entries" — list all entries in a collection. Use filters to search by field values. Use this FIRST if you do not know the entry ID. ' +
               '"get_entry" — get a single entry by its numeric ID (requires "collection" and "entry_id"). Only use when you have an actual numeric ID. ' +
               '"create_entry" — create a new entry in a collection (requires "collection" and "data"). ' +
@@ -109,6 +109,14 @@ const toolDefinitions = [
               'Example: {"title": "New Article", "content": "Hello world"}. ' +
               'Use get_entry first to see existing field names before updating.',
           },
+          search: {
+            type: 'string',
+            description:
+              'Optional search keyword for list_collections action. ' +
+              'Filters collections whose route or display name contains this keyword (case-insensitive). ' +
+              'Example: "venue" will match collections like "venues", "venue-categories", etc. ' +
+              'Use this to quickly find the correct collection when the user mentions a name.',
+          },
         },
         required: ['action'],
       },
@@ -132,7 +140,7 @@ async function executeToolCall(toolName, args) {
     return JSON.stringify({ error: `Unknown tool: ${toolName}` });
   }
 
-  const { action, filters } = args;
+  const { action, filters, search } = args;
 
   // Parse data if the LLM sends it as a JSON string instead of an object
   let data = args.data;
@@ -165,7 +173,7 @@ async function executeToolCall(toolName, args) {
   try {
     switch (action) {
       case 'list_collections':
-        return await listCollections();
+        return await listCollections(search);
 
       case 'get_entries':
         if (!collection) {
@@ -244,7 +252,7 @@ async function executeToolCall(toolName, args) {
  * Lists all available content types (collections & single types) from Strapi.
  * Uses the Content-Type Builder API to discover collections dynamically.
  */
-async function listCollections() {
+async function listCollections(search) {
   try {
     // Primary: Use Content-Type Builder API (requires admin or full-access token)
     const { data } = await strapiClient.get(
@@ -258,15 +266,26 @@ async function listCollections() {
 
     // Only return route (pluralName) and displayName to minimize token usage
     // Strapi v4 REST API uses pluralName as the route, NOT apiID
-    const collections = userTypes.map((ct) => ({
+    let collections = userTypes.map((ct) => ({
       route: ct.schema.pluralName,
       name: ct.schema.displayName,
     }));
 
-    return truncateResult({
-      message: `Found ${collections.length} content type(s). Use the "route" value as the "collection" parameter in other actions.`,
-      collections,
-    });
+    // Apply search filter if provided
+    if (search) {
+      const keyword = search.toLowerCase();
+      collections = collections.filter((c) =>
+        c.route.toLowerCase().includes(keyword) ||
+        c.name.toLowerCase().includes(keyword)
+      );
+    }
+
+    const message = search
+      ? `Found ${collections.length} collection(s) matching "${search}". Use the "route" value as the "collection" parameter in other actions.`
+      : `Found ${collections.length} content type(s). Use the "route" value as the "collection" parameter in other actions.`;
+
+    // Use a larger limit for list_collections since it can contain many items
+    return truncateResult({ message, collections }, 12000);
   } catch (primaryError) {
     // Fallback: Try the content-type-builder info endpoint
     try {
@@ -278,15 +297,25 @@ async function listCollections() {
         ct.uid?.startsWith('api::')
       );
 
-      const collections = userTypes.map((ct) => ({
+      let collections = userTypes.map((ct) => ({
         route: ct.schema?.pluralName,
         name: ct.schema?.displayName,
       }));
 
-      return truncateResult({
-        message: `Found ${collections.length} content type(s). Use the "route" value as the "collection" parameter in other actions.`,
-        collections,
-      });
+      // Apply search filter if provided
+      if (search) {
+        const keyword = search.toLowerCase();
+        collections = collections.filter((c) =>
+          c.route?.toLowerCase().includes(keyword) ||
+          c.name?.toLowerCase().includes(keyword)
+        );
+      }
+
+      const message = search
+        ? `Found ${collections.length} collection(s) matching "${search}". Use the "route" value as the "collection" parameter in other actions.`
+        : `Found ${collections.length} content type(s). Use the "route" value as the "collection" parameter in other actions.`;
+
+      return truncateResult({ message, collections }, 12000);
     } catch (_fallbackError) {
       const message =
         primaryError.response?.data?.error?.message ||
@@ -529,14 +558,14 @@ function findPdfUrls(obj, path = '') {
  * @param {object} obj - The result object to serialize
  * @returns {string} - JSON string, possibly truncated
  */
-function truncateResult(obj) {
+function truncateResult(obj, maxChars = MAX_RESULT_CHARS) {
   const json = JSON.stringify(obj);
-  if (json.length <= MAX_RESULT_CHARS) {
+  if (json.length <= maxChars) {
     return json;
   }
 
   // Truncate and add a notice
-  const truncated = json.substring(0, MAX_RESULT_CHARS);
+  const truncated = json.substring(0, maxChars);
   return truncated + '...[TRUNCATED — ask user to be more specific or use filters]';
 }
 

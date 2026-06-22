@@ -1,22 +1,25 @@
 /**
- * app.js
+ * deepseek-app.js
  *
- * Entry point for the Slack AI Agent. Sets up the Slack Bolt app in Socket Mode,
- * listens for @mentions, and orchestrates the Groq LLM tool-calling loop
- * to interact with Strapi CMS.
+ * Entry point for the Slack AI Agent using DeepSeek LLM.
+ * Sets up the Slack Bolt app in Socket Mode, listens for @mentions,
+ * and orchestrates the DeepSeek tool-calling loop to interact with Strapi CMS.
+ *
+ * DeepSeek API is OpenAI-compatible, so we use the OpenAI SDK
+ * pointed at DeepSeek's base URL.
  */
 
 require('dotenv').config();
 
 const { App } = require('@slack/bolt');
-const Groq = require('groq-sdk');
+const OpenAI = require('openai');
 const { toolDefinitions, executeToolCall } = require('./strapiTools');
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const DEEPSEEK_MODEL = 'deepseek-chat'; // DeepSeek-V3; use 'deepseek-reasoner' for R1
 const MAX_TOOL_ITERATIONS = 10; // Safety limit to prevent infinite tool-call loops
 
 const SYSTEM_PROMPT = `Kamu adalah asisten AI yang membantu mengelola data pada Strapi CMS.
@@ -76,11 +79,12 @@ const app = new App({
 });
 
 // ---------------------------------------------------------------------------
-// Initialize Groq Client
+// Initialize DeepSeek Client (OpenAI-compatible)
 // ---------------------------------------------------------------------------
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
+const deepseek = new OpenAI({
+  baseURL: 'https://api.deepseek.com',
+  apiKey: process.env.DEEPSEEK_API_KEY,
 });
 
 // ---------------------------------------------------------------------------
@@ -117,8 +121,8 @@ app.event('app_mention', async ({ event, client, say }) => {
       });
     } catch (_) { /* reactions:write scope not available, skip */ }
 
-    // Run the Groq tool-calling loop
-    const response = await runGroqToolLoop(userPrompt);
+    // Run the DeepSeek tool-calling loop
+    const response = await runDeepSeekToolLoop(userPrompt);
 
     // Send the final response back to Slack
     await say({
@@ -145,23 +149,23 @@ app.event('app_mention', async ({ event, client, say }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Groq Tool-Calling Loop
+// DeepSeek Tool-Calling Loop
 // ---------------------------------------------------------------------------
 
 /**
- * Orchestrates the multi-turn conversation with Groq, handling tool calls
+ * Orchestrates the multi-turn conversation with DeepSeek, handling tool calls
  * iteratively until the LLM produces a final text response.
  *
  * Flow:
- * 1. Send user prompt + tool definitions to Groq
- * 2. If Groq responds with tool_calls, execute each tool
- * 3. Feed tool results back to Groq
- * 4. Repeat until Groq produces a text response (no more tool_calls)
+ * 1. Send user prompt + tool definitions to DeepSeek
+ * 2. If DeepSeek responds with tool_calls, execute each tool
+ * 3. Feed tool results back to DeepSeek
+ * 4. Repeat until DeepSeek produces a text response (no more tool_calls)
  *
  * @param {string} userPrompt - The cleaned user message
  * @returns {Promise<string>} - The final natural-language response
  */
-async function runGroqToolLoop(userPrompt) {
+async function runDeepSeekToolLoop(userPrompt) {
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: userPrompt },
@@ -171,28 +175,48 @@ async function runGroqToolLoop(userPrompt) {
   const MAX_TOTAL_TOOL_CALLS = 15;
   const seenCalls = new Set();
 
+  // Token usage tracking
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+  let totalTokensUsed = 0;
+
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     let response;
     try {
-      response = await groq.chat.completions.create({
-        model: GROQ_MODEL,
+      response = await deepseek.chat.completions.create({
+        model: DEEPSEEK_MODEL,
         messages,
         tools: toolDefinitions,
         tool_choice: 'auto',
         temperature: 0.3,
         max_tokens: 4096,
       });
-    } catch (groqError) {
-      // Handle Groq validation errors (e.g. bad tool call parameters) gracefully
-      console.error('[Groq API Error]', groqError.message);
-      return `⚠️ AI gagal memproses permintaan: ${groqError.error?.error?.message || groqError.message}`;
+    } catch (apiError) {
+      // Handle DeepSeek API errors gracefully
+      console.error('[DeepSeek API Error]', apiError.message);
+      return `⚠️ AI gagal memproses permintaan: ${apiError.error?.error?.message || apiError.message}`;
+    }
+
+    // Accumulate token usage from this API call
+    if (response.usage) {
+      totalPromptTokens += response.usage.prompt_tokens || 0;
+      totalCompletionTokens += response.usage.completion_tokens || 0;
+      totalTokensUsed += response.usage.total_tokens || 0;
+      console.log(
+        `[Token Usage] Iteration ${iteration + 1}: ` +
+        `prompt=${response.usage.prompt_tokens}, ` +
+        `completion=${response.usage.completion_tokens}, ` +
+        `total=${response.usage.total_tokens}`
+      );
     }
 
     const assistantMessage = response.choices[0].message;
 
-    // If no tool calls, return the text response
+    // If no tool calls, return the text response with token usage footer
     if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
-      return assistantMessage.content || '(Tidak ada respons dari AI)';
+      const content = assistantMessage.content || '(Tidak ada respons dari AI)';
+      const tokenFooter = formatTokenFooter(totalPromptTokens, totalCompletionTokens, totalTokensUsed);
+      return `${content}\n\n${tokenFooter}`;
     }
 
     // Append the assistant's message (with tool_calls) to conversation history
@@ -205,7 +229,8 @@ async function runGroqToolLoop(userPrompt) {
       // Hard limit on total tool calls
       if (totalToolCalls > MAX_TOTAL_TOOL_CALLS) {
         console.log(`[Loop Guard] Exceeded ${MAX_TOTAL_TOOL_CALLS} total tool calls, stopping.`);
-        return '⚠️ Terlalu banyak pemanggilan tool. Silakan coba pertanyaan yang lebih spesifik.';
+        const tokenFooter = formatTokenFooter(totalPromptTokens, totalCompletionTokens, totalTokensUsed);
+        return `⚠️ Terlalu banyak pemanggilan tool. Silakan coba pertanyaan yang lebih spesifik.\n\n${tokenFooter}`;
       }
 
       const functionName = toolCall.function.name;
@@ -245,7 +270,30 @@ async function runGroqToolLoop(userPrompt) {
     }
   }
 
-  return '⚠️ Proses terlalu kompleks — mencapai batas maksimum iterasi tool. Silakan coba pertanyaan yang lebih spesifik.';
+  const tokenFooter = formatTokenFooter(totalPromptTokens, totalCompletionTokens, totalTokensUsed);
+  return `⚠️ Proses terlalu kompleks — mencapai batas maksimum iterasi tool. Silakan coba pertanyaan yang lebih spesifik.\n\n${tokenFooter}`;
+}
+
+/**
+ * Formats a human-readable token usage footer for Slack messages.
+ *
+ * @param {number} promptTokens - Total prompt (input) tokens
+ * @param {number} completionTokens - Total completion (output) tokens
+ * @param {number} totalTokens - Total tokens used
+ * @returns {string} Formatted token usage string
+ */
+function formatTokenFooter(promptTokens, completionTokens, totalTokens) {
+  // DeepSeek-V3 pricing (as of 2025): $0.27/M input, $1.10/M output (cache miss)
+  const inputCost = (promptTokens / 1_000_000) * 0.27;
+  const outputCost = (completionTokens / 1_000_000) * 1.10;
+  const estimatedCost = inputCost + outputCost;
+
+  return `───────────────\n` +
+    `📊 *Token Usage*\n` +
+    `• Input: ${promptTokens.toLocaleString()} tokens\n` +
+    `• Output: ${completionTokens.toLocaleString()} tokens\n` +
+    `• Total: ${totalTokens.toLocaleString()} tokens\n` +
+    `• Est. Cost: ~$${estimatedCost.toFixed(6)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,8 +303,8 @@ async function runGroqToolLoop(userPrompt) {
 (async () => {
   try {
     await app.start();
-    console.log('⚡️ Slack AI Agent is running!');
-    console.log(`   Model  : ${GROQ_MODEL}`);
+    console.log('⚡️ Slack AI Agent is running! (DeepSeek)');
+    console.log(`   Model  : ${DEEPSEEK_MODEL}`);
     console.log(`   Strapi : ${process.env.STRAPI_URL || 'http://localhost:1337'}`);
   } catch (error) {
     console.error('❌ Failed to start the app:', error.message);

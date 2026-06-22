@@ -18,8 +18,8 @@ const { executeToolCall } = require('./strapiTools');
 // ---------------------------------------------------------------------------
 
 const GEMINI_MODEL = 'gemini-2.0-flash';
-const MAX_TOOL_ITERATIONS = 3;
-const MAX_TOTAL_TOOL_CALLS = 6;
+const MAX_TOOL_ITERATIONS = 10;
+const MAX_TOTAL_TOOL_CALLS = 15;
 
 const SYSTEM_PROMPT = `Kamu adalah asisten AI yang membantu mengelola data pada Strapi CMS.
 Kamu terhubung ke instance Strapi v4 melalui tool "access_strapi_cms".
@@ -31,16 +31,41 @@ Kemampuanmu:
 4. Membuat, mengubah, dan menghapus entry.
 5. Membaca dan meringkas isi file PDF yang terlampir pada entry Strapi.
 
-ATURAN PENTING:
-- Gunakan action "list_collections" PERTAMA untuk mendapatkan nama route yang benar. Gunakan nilai "route" dari hasilnya sebagai parameter "collection".
-- Jangan pernah menebak nama collection. Selalu gunakan list_collections dulu.
-- Jika user meminta data tapi tidak menyebutkan ID, gunakan "get_entries" dengan filters untuk mencari entry yang relevan.
-- Parameter "entry_id" HARUS berupa angka nyata (contoh: "5", "12"). JANGAN PERNAH memasukkan placeholder atau teks seperti "entry_id_from_get_entries" — ini akan error.
-- Untuk update/delete, SELALU cari entry dulu dengan get_entries untuk mendapatkan ID numerik yang benar.
+MEMAHAMI BAHASA NATURAL USER:
+- User akan bicara secara natural. Mereka TIDAK akan menyebutkan nama teknis API.
+- "Venue" = collection "venues", "Artikel" = "articles", "Event" = "events", dll.
+- "marketing address" = kemungkinan field "marketingAddress" atau "marketing_address" di Strapi.
+- "tengah kota" = kemungkinan bagian dari nama entry → gunakan filter $contains untuk mencari.
+- Selalu terjemahkan istilah natural user ke parameter teknis Strapi yang benar.
+
+WORKFLOW MENCARI COLLECTION:
+1. SELALU panggil list_collections dengan parameter "search" berisi keyword dari nama yang disebut user.
+   Contoh: user bilang "Venue" → list_collections(search="venue").
+2. Dari hasilnya, gunakan nilai "route" sebagai parameter "collection".
+3. Jika ada beberapa collection yang mirip, tanyakan ke user mana yang dimaksud.
+4. Jangan pernah menebak nama collection tanpa memanggil list_collections dulu.
+
+WORKFLOW UPDATE/DELETE (WAJIB IKUTI URUTAN INI):
+1. Cari collection: list_collections(search="<keyword>") → dapatkan route.
+2. Cari entry: get_entries(collection, filters={"name": {"$contains": "<keyword>"}}) → dapatkan ID numerik DAN lihat nama-nama field yang tersedia di data entry.
+3. Cocokkan field: Perhatikan field names dari hasil get_entries. User mungkin bilang "marketing address" tapi field-nya bisa "marketingAddress", "marketing_address", atau "alamat_marketing". Pilih yang paling cocok.
+4. Eksekusi: update_entry(collection, entry_id, data={fieldYangBenar: "nilai baru"}).
+- JANGAN PERNAH langsung update tanpa get_entries dulu. Kamu butuh ID numerik dan nama field yang benar.
+
+WORKFLOW MEMBUAT ENTRY BARU:
+1. Cari collection dulu dengan list_collections.
+2. Gunakan get_entries atau get_entry untuk melihat struktur field yang ada.
+3. Buat entry dengan create_entry menggunakan field names yang benar dari hasil inspeksi.
+
+ATURAN UMUM:
+- Parameter "entry_id" HARUS berupa angka (contoh: "5", "12"). JANGAN PERNAH isi dengan placeholder.
+- Untuk mencari entry berdasarkan nama/judul, gunakan filter: {"name": {"$contains": "kata kunci"}} atau {"title": {"$contains": "kata kunci"}}.
+- Jika field pencarian tidak pasti antara "name" atau "title", coba "name" dulu. Jika hasilnya kosong, coba "title".
 - Jika user meminta ringkasan PDF, gunakan action "read_attachment" lalu ringkas hasilnya.
 - Selalu jawab dalam bahasa yang sama dengan bahasa user (Indonesia atau English).
 - Berikan jawaban yang ringkas dan informatif.
-- Jika terjadi error, jelaskan masalahnya dengan bahasa yang mudah dipahami.`;
+- Jika terjadi error, jelaskan masalahnya dengan bahasa yang mudah dipahami.
+- Setelah berhasil update/create/delete, konfirmasi ke user apa yang sudah dilakukan beserta detail datanya.`;
 
 // ---------------------------------------------------------------------------
 // Gemini Tool Definitions (different format from Groq/OpenAI)
@@ -67,7 +92,7 @@ const geminiTools = [
               type: 'STRING',
               description:
                 'The action to perform. ' +
-                '"list_collections" — list all available content types. ' +
+                '"list_collections" — list all available content types. Use "search" parameter to filter by name. ' +
                 '"get_entries" — list all entries in a collection. Use filters to search by field values. ' +
                 '"get_entry" — get a single entry by its numeric ID. ' +
                 '"create_entry" — create a new entry (requires "collection" and "data"). ' +
@@ -107,6 +132,13 @@ const geminiTools = [
               description:
                 'The data payload for create_entry and update_entry actions. ' +
                 'Must contain the field values to set.',
+            },
+            search: {
+              type: 'STRING',
+              description:
+                'Optional search keyword for list_collections action. ' +
+                'Filters collections whose route or display name contains this keyword (case-insensitive). ' +
+                'Example: "venue" will match collections like "venues", "venue-categories", etc.',
             },
           },
           required: ['action'],
